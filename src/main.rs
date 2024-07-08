@@ -14,8 +14,8 @@ use time::Date;
 const RANDOM_STRING_LENGTH: usize = 32;
 // total records generated is TOTAL_BATCHES * RECORDS_PER_BATCH.
 // TOTAL_BATCHES should be a multiple of PARALLELISM.
-const TOTAL_BATCHES: usize = 40;
-const RECORDS_PER_BATCH: usize = 250_000;
+const TOTAL_BATCHES: usize = 1024;
+const RECORDS_PER_BATCH: usize = 1024;
 // the number of batches to be generated is divided evenly across the parallel threads.
 const PARALLELISM: usize = 16;
 
@@ -40,14 +40,16 @@ struct Record {
 // set the parameters of your database here.
 fn initialize_client() -> Client {
     let mut config = Config::new();
-    config.host("[HOST HERE]");
-    config.port(0);
-    config.user("[USER HERE]");
-    config.password(r"[PASSWORD HERE]");
-    config.dbname("[DATABASE HERE]");
+    config.host("localhost");
+    config.port(5431);
+    config.user("raminder.singh");
+    // config.password(r"[PASSWORD HERE]");
+    config.dbname("benchmark");
     config.ssl_mode(SslMode::Disable);
 
-    return config.connect(NoTls).unwrap();
+    config
+        .connect(NoTls)
+        .expect("failed to connect to the database")
 }
 
 fn setup_table() {
@@ -77,7 +79,7 @@ fn setup_table() {
     )",
             &[],
         )
-        .unwrap();
+        .expect("failed to create table");
 
     info!("finished creating target table")
 }
@@ -87,7 +89,7 @@ fn processor(process_id: usize) {
     let mut rng = rand::thread_rng();
 
     for batch_id in 0..(TOTAL_BATCHES / PARALLELISM) {
-        let mut records = Vec::with_capacity(RECORDS_PER_BATCH as usize);
+        let mut records = Vec::with_capacity(RECORDS_PER_BATCH);
         for _ in 0..RECORDS_PER_BATCH {
             records.push(Record {
                 f1: rng.gen(),
@@ -99,9 +101,12 @@ fn processor(process_id: usize) {
                 f7: rng.gen(),
                 f8: Alphanumeric.sample_string(&mut rng, RANDOM_STRING_LENGTH),
                 f9: Alphanumeric.sample_string(&mut rng, RANDOM_STRING_LENGTH),
-                f10: Date::from_ordinal_date(rng.gen_range(1..9999), rng.gen_range(1..365)).unwrap(),
-                f11: Date::from_ordinal_date(rng.gen_range(1..9999), rng.gen_range(1..365)).unwrap(),
-                f12: Date::from_ordinal_date(rng.gen_range(1..9999), rng.gen_range(1..365)).unwrap(),
+                f10: Date::from_ordinal_date(rng.gen_range(1..9999), rng.gen_range(1..365))
+                    .expect("failed to create date"),
+                f11: Date::from_ordinal_date(rng.gen_range(1..9999), rng.gen_range(1..365))
+                    .expect("failed to create date"),
+                f12: Date::from_ordinal_date(rng.gen_range(1..9999), rng.gen_range(1..365))
+                    .expect("failed to create date"),
                 f13: Alphanumeric.sample_string(&mut rng, RANDOM_STRING_LENGTH),
                 f14: Alphanumeric.sample_string(&mut rng, RANDOM_STRING_LENGTH),
                 f15: Alphanumeric.sample_string(&mut rng, RANDOM_STRING_LENGTH),
@@ -110,7 +115,7 @@ fn processor(process_id: usize) {
 
         let copy_sink = client
             .copy_in("COPY firenibble(f1,f2,f3,f4,f5,f6,f7,f8,f9,f10,f11,f12,f13,f14,f15) FROM STDIN BINARY")
-            .unwrap();
+            .expect("failed to create the CopyInWriter");
         let mut copy_writer = BinaryCopyInWriter::new(
             copy_sink,
             &[
@@ -150,10 +155,12 @@ fn processor(process_id: usize) {
                 &record.f14,
                 &record.f15,
             ];
-            copy_writer.write(row.as_slice()).unwrap();
+            copy_writer
+                .write(row.as_slice())
+                .expect("failed to write with copy writer");
         }
 
-        let row_count = copy_writer.finish().unwrap();
+        let row_count = copy_writer.finish().expect("failed to finish copy writer");
         if row_count as usize != RECORDS_PER_BATCH {
             error!(
                 "[Process/Batch #{}/#{}] Failed to write some rows: {}/{} rows written",
@@ -180,15 +187,13 @@ fn main() {
         }
     });
     let elapsed = start.elapsed();
+    let total_records = TOTAL_BATCHES * RECORDS_PER_BATCH;
     info!(
         "Finished inserting {} rows in {:.2?} seconds",
-        TOTAL_BATCHES * RECORDS_PER_BATCH,
-        elapsed
+        total_records, elapsed
     );
     info!(
-        "Throughput: {:.2}",
-        (TOTAL_BATCHES * RECORDS_PER_BATCH) as f64 / elapsed.as_secs_f64()
+        "Throughput: {:.2} records/second",
+        (total_records) as f64 / elapsed.as_secs_f64()
     );
-
-    ()
 }
